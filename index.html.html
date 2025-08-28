@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<title>Controle de Escala - Corrigido</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;margin:18px}
+  h1{text-align:center}
+  table{width:100%;border-collapse:collapse;background:#fff;margin-top:12px}
+  th,td{border:1px solid #ccc;padding:8px;text-align:center;vertical-align:middle}
+  th{background:#eee}
+  .preta{background:#000;color:#fff}
+  .azul{background:#007bff;color:#fff}
+  .vermelha{background:#dc3545;color:#fff}
+  select,input{padding:4px}
+  button{padding:6px 10px;margin:4px;cursor:pointer}
+  .small{padding:4px 8px;font-size:13px}
+  .actions{display:flex;gap:6px;justify-content:center;align-items:center}
+  .col-vertical{display:flex;flex-direction:column;gap:6px;align-items:center}
+  .note{font-size:12px;color:#444}
+</style>
+</head>
+<body>
+  <h1>Controle de Escala - Versão Final</h1>
+
+  <div>
+    <label>Número do militar (156 a 181): </label>
+    <input id="numMilitar" type="number" />
+    <button onclick="registrarServico()">Salvar Serviço (hoje)</button>
+    <button onclick="resetarTudo()" title="Apagar dados locais (testes)">🧹 Resetar Tudo</button>
+  </div>
+
+  <div style="margin-top:8px;">
+    <button onclick="gerarResumoTotal()">Resumo Consolidado (projeção)</button>
+    <button onclick="salvarFuncoes()">💾 SALVAR FUNÇÕES E RECALCULAR</button>
+  </div>
+
+  <h2>Escala Atual (contagens)</h2>
+  <table id="tabela">
+    <thead><tr><th>Número</th><th>Nome</th><th class="preta">Preta</th><th class="azul">Azul</th><th class="vermelha">Vermelha</th><th>Função</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Histórico de Serviços (exportado)</h2>
+  <table id="historico">
+    <thead><tr><th>Data</th><th>Preta</th><th>Azul</th><th>Vermelha</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Projeção até 14/11</h2>
+  <table id="projecao">
+    <thead><tr><th>Data</th><th>Cor</th><th>Escalados (3)</th><th>Ações</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="resumoEscala" style="margin-top:12px"></div>
+
+<script>
+/* ===========================
+   Dados iniciais
+   =========================== */
+const END_DATE_ISO = "2025-11-14";
+
+const militares = {
+156:"CLELIO JOAO DA SILVA",157:"LEANDRO LIMA NETO",158:"ADRIANO DOS ANJOS ROSA",
+159:"TATIANE DE BARROS OLIVEIRA",160:"MATHEUS ROBERTO SOARES SASSI",161:"SAIMON FEITEN RODRIGUES",
+162:"EBERTON PERUZZI",163:"RAFAEL LAZZARI",164:"CHAIAINE MATOS DA CRUZ",
+165:"GIOVANI MOREIRA MACEDO",166:"VIVIANE VIANA DO AMARAL",167:"GUILHERME SCHMIDT DOS SANTOS",
+168:"VAGNER AUGUSTO PORTELA DUARTE",169:"ELIZANDRA SCHENKARTCZUK",170:"LUCAS WEBBER MOURA",
+171:"DORA BERROCAL DOS SANTOS CARDOSO",172:"GABRIEL FELIPE MENDES KRESMARUCH",173:"CLEITON DARIEL DA SILVA RONTANI",
+174:"LUIZ ANDRE DE OLIVEIRA",175:"RODRIGO GONÇALVES DA SILVA",176:"JOÃO DORNELLES TELES",
+177:"ADRIEL IORAN DUARTE VIEIRA",178:"ROBSOM COSTA MACHADO",179:"JONATAS WILLIAM SILVEIRA HEMPE",
+180:"DOUGLAS MACHADO DA SILVA",181:"CANDIDO AURELIO DA SILVA"
+};
+
+const funcoesFixas = ["Xerife","Aux 2cia","PMA1","PM2","PM3","PM4","PM5","Obras"];
+
+/* registros[num] = { nome, preta, azul, vermelha, funcao } */
+let registros = {};
+Object.keys(militares).forEach(n=>{
+  registros[n] = { nome: militares[n], preta:0, azul:0, vermelha:0, funcao: "" };
+});
+
+/* historico = [{ dateISO, cor, num }, ...]  (exportações e registros manuais) */
+let historico = [];
+
+/* projecao = [{ dateISO, displayDate, cor, escalados:[{num,nome}], altered(bool), exported(bool), dirty(bool) }, ...] */
+let projecao = [];
+
+/* ===========================
+   utilitários de data
+   =========================== */
+function toISO(d){ const dt = new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'); }
+function isoToDate(iso){ const p=iso.split('-'); return new Date(Number(p[0]),Number(p[1])-1,Number(p[2])); }
+function isoToDisplay(iso){ return isoToDate(iso).toLocaleDateString('pt-BR'); }
+function todayISO(){ return toISO(new Date()); }
+function getCorByISO(iso){ const wd = isoToDate(iso).getDay(); if(wd>=1 && wd<=4) return 'preta'; if(wd===5) return 'azul'; return 'vermelha'; }
+
+/* ===========================
+   Storage
+   =========================== */
+const KEY_REG = 'esc_registros_v1';
+const KEY_HIS = 'esc_historico_v1';
+const KEY_PRO = 'esc_projecao_v1';
+
+function saveAll(){
+  localStorage.setItem(KEY_REG, JSON.stringify(registros));
+  localStorage.setItem(KEY_HIS, JSON.stringify(historico));
+  localStorage.setItem(KEY_PRO, JSON.stringify(projecao));
+}
+function loadAll(){
+  const r = localStorage.getItem(KEY_REG);
+  const h = localStorage.getItem(KEY_HIS);
+  const p = localStorage.getItem(KEY_PRO);
+  if(r) registros = JSON.parse(r);
+  if(h) historico = JSON.parse(h);
+  if(p) projecao = JSON.parse(p);
+}
+
+/* ===========================
+   countsFromHistory -> base counts
+   =========================== */
+function countsFromHistory(){
+  const counts = { preta:{}, azul:{}, vermelha:{} };
+  Object.keys(militares).forEach(n=>{ counts.preta[n]=0; counts.azul[n]=0; counts.vermelha[n]=0; });
+  historico.forEach(h=>{
+    if(h && h.dateISO && h.cor && h.num && counts[h.cor]) counts[h.cor][String(h.num)] = (counts[h.cor][String(h.num)]||0) + 1;
+  });
+  return counts;
+}
+
+/* ===========================
+   Gera a projeção (preserva dias altered/exported)
+   - startISO default = hoje
+   - endISO default = END_DATE_ISO
+   =========================== */
+function gerarProjecao(startISO = null, endISO = END_DATE_ISO){
+  const start = startISO ? isoToDate(startISO) : new Date();
+  const end = isoToDate(endISO);
+  const dateList = [];
+  for(let d=new Date(start.getFullYear(), start.getMonth(), start.getDate()); d<=end; d.setDate(d.getDate()+1)){
+    dateList.push(toISO(new Date(d)));
+  }
+
+  // map existing projecao by iso
+  const existing = {};
+  projecao.forEach(p=>{ if(p && p.dateISO) existing[p.dateISO] = p; });
+
+  // running counts start from historico (exported days are in historico)
+  const running = countsFromHistory();
+
+  const newProj = [];
+  for(let i=0;i<dateList.length;i++){
+    const iso = dateList[i];
+    const cor = getCorByISO(iso);
+    const display = isoToDisplay(iso);
+
+    // preserve exported (already in historico) and preserve altered (manual) days
+    if(existing[iso] && existing[iso].exported){
+      // exported preserved; historico already counts it => do not add to running
+      const day = {
+        dateISO: iso,
+        displayDate: display,
+        cor,
+        escalados: (existing[iso].escalados||[]).map(e=>({ num:String(e.num), nome: e.nome || (registros[String(e.num)]?.nome||militares[String(e.num)]) })),
+        altered: !!existing[iso].altered,
+        exported: true,
+        dirty: false
+      };
+      newProj.push(day);
+      continue;
+    }
+    if(existing[iso] && existing[iso].altered){
+      // preserve altered day and increment running counts (they are not yet in historico)
+      const day = {
+        dateISO: iso,
+        displayDate: display,
+        cor,
+        escalados: (existing[iso].escalados||[]).map(e=>({ num:String(e.num), nome: e.nome || (registros[String(e.num)]?.nome||militares[String(e.num)]) })),
+        altered: true,
+        exported: !!existing[iso].exported,
+        dirty: false
+      };
+      day.escalados.forEach(e=> running[cor][String(e.num)] = (running[cor][String(e.num)]||0) + 1);
+      newProj.push(day);
+      continue;
+    }
+
+    // compute eligible list
+    let eligible = Object.keys(militares).filter(n => !funcoesFixas.includes(registros[n].funcao));
+    // block prev day assigned (avoid consecutive)
+    const prev = newProj[i-1];
+    if(prev && prev.escalados) {
+      const prevNums = prev.escalados.map(x=>String(x.num));
+      eligible = eligible.filter(n => !prevNums.includes(String(n)));
+    }
+    // block next locked assigned (if next is altered/exported we should avoid those)
+    const nextIso = dateList[i+1];
+    const nextExisting = existing[nextIso];
+    const nextLockedAssigned = nextExisting && (nextExisting.altered || nextExisting.exported) ? (nextExisting.escalados||[]).map(e=>String(e.num)) : [];
+    if(nextLockedAssigned.length) eligible = eligible.filter(n => !nextLockedAssigned.includes(String(n)));
+
+    // sort by running count
+    eligible.sort((a,b) => {
+      const ca = running[cor][a]||0;
+      const cb = running[cor][b]||0;
+      if(ca!==cb) return ca - cb;
+      return Number(a) - Number(b);
+    });
+
+    // pick up to 3
+    const assigned = [];
+    for(let j=0;j<eligible.length && assigned.length<3;j++){
+      assigned.push(String(eligible[j]));
+      running[cor][String(eligible[j])] = (running[cor][String(eligible[j])]||0) + 1;
+    }
+    // fallback to any if <3
+    if(assigned.length < 3){
+      const others = Object.keys(militares).filter(n => !assigned.includes(String(n)));
+      for(let j=0;j<others.length && assigned.length<3;j++){
+        assigned.push(String(others[j]));
+        running[cor][String(others[j])] = (running[cor][String(others[j])]||0) + 1;
+      }
+    }
+
+    newProj.push({
+      dateISO: iso,
+      displayDate: display,
+      cor,
+      escalados: assigned.map(n=>({ num:String(n), nome: registros[String(n)]?.nome || militares[String(n)] })),
+      altered: false,
+      exported: false,
+      dirty: false
+    });
+  }
+
+  projecao = newProj;
+  saveAllAndRender(false);
+}
+
+/* ===========================
+   Renderers
+   =========================== */
+function renderRegistros(){
+  const tbody = document.querySelector('#tabela tbody'); tbody.innerHTML = '';
+  Object.keys(registros).sort((a,b)=>Number(a)-Number(b)).forEach(num=>{
+    const r = registros[num];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${num}</td><td>${r.nome}</td><td>${r.preta||0}</td><td>${r.azul||0}</td><td>${r.vermelha||0}</td>
+      <td>
+        <select id="func_${num}">
+          <option value="">(vazio)</option>
+          ${funcoesFixas.map(f=>`<option value="${f}" ${r.funcao===f?'selected':''}>${f}</option>`).join('')}
+        </select>
+      </td>`;
+    tbody.appendChild(tr);
+    document.getElementById(`func_${num}`).addEventListener('change', e=>{
+      registros[num].funcao = e.target.value;
+      // recalc projection because eligibility changed
+      saveAllAndRender(true);
+    });
+  });
+}
+
+function renderHistorico(){
+  const tbody = document.querySelector('#historico tbody'); tbody.innerHTML='';
+  const byDate = {};
+  historico.forEach(h=>{
+    if(!byDate[h.dateISO]) byDate[h.dateISO] = {preta:[], azul:[], vermelha:[]};
+    byDate[h.dateISO][h.cor].push(registros[String(h.num)]?.nome || militares[String(h.num)] || h.num);
+  });
+  Object.keys(byDate).sort((a,b)=>a.localeCompare(b)).forEach(iso=>{
+    const r = byDate[iso];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${isoToDisplay(iso)}</td><td>${r.preta.join(', ')}</td><td>${r.azul.join(', ')}</td><td>${r.vermelha.join(', ')}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderProjecao(){
+  const tbody = document.querySelector('#projecao tbody'); tbody.innerHTML = '';
+  const today = todayISO();
+
+  projecao.forEach((day, idx) => {
+    const tr = document.createElement('tr');
+
+    // Date + Export button (if today or altered) and not exported yet
+    const tdDate = document.createElement('td');
+    tdDate.textContent = day.displayDate;
+    const actions = document.createElement('div'); actions.className = 'actions';
+
+    if((day.dateISO === today || day.altered) && !day.exported){
+      const btnExport = document.createElement('button'); btnExport.className='small';
+      btnExport.textContent = '📤 Exportar';
+      btnExport.title = 'Exportar esta escala para o histórico';
+      btnExport.addEventListener('click', ()=> exportarDia(idx));
+      actions.appendChild(btnExport);
+    } else if(day.exported){
+      const span = document.createElement('span'); span.textContent = '✅ Exportado'; actions.appendChild(span);
+    }
+    tdDate.appendChild(actions);
+
+    // Cor
+    const tdCor = document.createElement('td'); tdCor.textContent = day.cor; tdCor.className = day.cor;
+
+    // Escalados (selects)
+    const tdEsc = document.createElement('td'); tdEsc.className = 'col-vertical';
+
+    const prev = projecao[idx-1];
+    const next = projecao[idx+1];
+    const prevAssigned = prev ? (prev.escalados||[]).map(e=>String(e.num)) : [];
+    const nextAssigned = next ? (next.escalados||[]).map(e=>String(e.num)) : [];
+
+    // Save button per day
+    const btnSave = document.createElement('button'); btnSave.className='small';
+    btnSave.textContent = '💾 Salvar Escala (dia)';
+    btnSave.style.display = day.dirty ? 'inline-block' : 'none';
+    btnSave.addEventListener('click', ()=>{
+      // mark altered and persist; then recalc projection (will preserve this altered)
+      projecao[idx].altered = true;
+      projecao[idx].dirty = false;
+      saveAll();
+      // recalc entire projection (preserving altered/exported)
+      gerarProjecao();
+      alert('Escala do dia '+day.displayDate+' salva permanentemente na projeção.');
+    });
+
+    day.escalados.forEach((slot, sIdx) => {
+      const row = document.createElement('div');
+      row.style.display='flex'; row.style.gap='8px'; row.style.alignItems='center'; row.style.justifyContent='center';
+
+      const label = document.createElement('span'); label.textContent = `Vaga ${sIdx+1}:`;
+
+      const sel = document.createElement('select');
+      Object.keys(registros).sort((a,b)=>Number(a)-Number(b)).forEach(num=>{
+        const opt = document.createElement('option'); opt.value = String(num);
+        opt.textContent = `${num} - ${registros[num].nome}`;
+        if(String(slot.num) === String(num)) opt.selected = true;
+
+        // disable conditions: function fixed, assigned prev day, assigned next day, day exported
+        if(funcoesFixas.includes(registros[num].funcao)) opt.disabled = true;
+        if(prevAssigned.includes(String(num))) opt.disabled = true;
+        if(nextAssigned.includes(String(num))) opt.disabled = true;
+        if(day.exported) opt.disabled = true;
+
+        sel.appendChild(opt);
+      });
+
+      sel.addEventListener('change', ()=>{
+        projecao[idx].escalados[sIdx] = { num: sel.value, nome: registros[sel.value]?.nome || militares[sel.value] };
+        projecao[idx].dirty = true;
+        btnSave.style.display = 'inline-block';
+        saveAll(); // keep temporary edits in storage
+      });
+
+      row.appendChild(label);
+      row.appendChild(sel);
+      tdEsc.appendChild(row);
+    });
+
+    const tdActions = document.createElement('td');
+    tdActions.appendChild(btnSave);
+    if(day.altered){
+      const note = document.createElement('div'); note.className='note'; note.textContent = '(Alterado manualmente)';
+      tdActions.appendChild(note);
+    }
+    if(day.exported){
+      const note = document.createElement('div'); note.className='note'; note.textContent = '(Exportado p/ histórico)';
+      tdActions.appendChild(note);
+    }
+
+    tr.appendChild(tdDate);
+    tr.appendChild(tdCor);
+    tr.appendChild(tdEsc);
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  });
+}
+
+/* ===========================
+   Exportar dia (salvar no historico)
+   - acrescenta no historico e atualiza 'registros' contadores
+   - marca day.exported = true (não editável)
+   - persiste e recalc projecao (history counts used)
+   =========================== */
+function exportarDia(idx){
+  const day = projecao[idx];
+  if(!day) return alert('Dia inválido');
+  if(day.exported) return alert('Já exportado');
+
+  day.escalados.forEach(e=>{
+    historico.push({ dateISO: day.dateISO, cor: day.cor, num: String(e.num) });
+    // increment registros counters
+    registros[String(e.num)][day.cor] = (registros[String(e.num)][day.cor] || 0) + 1;
+  });
+
+  projecao[idx].exported = true;
+  saveAll();
+  // regenerate projection because historico changed (counts changed)
+  gerarProjecao();
+  alert('Escala de ' + day.displayDate + ' exportada para histórico.');
+}
+
+/* ===========================
+   Registrar serviço manual (hoje)
+   =========================== */
+function registrarServico(){
+  const raw = String(document.getElementById('numMilitar').value).trim();
+  if(!raw || !militares[raw]) return alert('Número inválido');
+  const iso = todayISO();
+  const cor = getCorByISO(iso);
+  historico.push({ dateISO: iso, cor, num: raw });
+  registros[raw][cor] = (registros[raw][cor] || 0) + 1;
+  saveAll();
+  gerarProjecao(); // recalc projection fairness
+  alert('Serviço registrado para ' + registros[raw].nome + ' em ' + isoToDisplay(iso));
+}
+
+/* ===========================
+   Resumo consolidado (da projeção)
+   =========================== */
+function gerarResumoTotal(){
+  const resumo = {};
+  Object.keys(militares).forEach(n => resumo[n] = {preta:0, azul:0, vermelha:0});
+  projecao.forEach(d => {
+    (d.escalados||[]).forEach(e => resumo[String(e.num)][d.cor] = (resumo[String(e.num)][d.cor]||0) + 1 );
+  });
+  let html = '<h3>Resumo Consolidado (projeção)</h3><table style="width:100%"><thead><tr><th>Num - Nome</th><th>Preta</th><th>Azul</th><th>Vermelha</th></tr></thead><tbody>';
+  Object.keys(resumo).sort((a,b)=>Number(a)-Number(b)).forEach(n=>{
+    html += `<tr><td>${n} - ${registros[n]?.nome || militares[n]}</td><td>${resumo[n].preta||0}</td><td>${resumo[n].azul||0}</td><td>${resumo[n].vermelha||0}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('resumoEscala').innerHTML = html;
+}
+
+/* ===========================
+   Save & render helper
+   =========================== */
+function saveAllAndRender(recalcProjection = false){
+  saveAll();
+  if(recalcProjection) gerarProjecao();
+  renderRegistros();
+  renderHistorico();
+  renderProjecao();
+  gerarResumoTotal();
+}
+function salvarFuncoes(){ saveAllAndRender(true); }
+
+/* ===========================
+   Reset (apaga localStorage)
+   =========================== */
+function resetarTudo(){
+  if(!confirm('Apagar dados locais (registros, histórico, projeção)?')) return;
+  localStorage.removeItem(KEY_REG);
+  localStorage.removeItem(KEY_HIS);
+  localStorage.removeItem(KEY_PRO);
+  location.reload();
+}
+
+/* ===========================
+   Inicialização
+   =========================== */
+(function init(){
+  loadAll();
+
+  // normalize projecao shapes
+  projecao = (projecao || []).map(p=>{
+    if(!p) return p;
+    const dateISO = p.dateISO || (p.displayDate ? toISO(isoToDate(p.displayDate)) : null);
+    return {
+      dateISO,
+      displayDate: p.displayDate || (dateISO ? isoToDisplay(dateISO) : ''),
+      cor: p.cor || (dateISO ? getCorByISO(dateISO) : 'preta'),
+      escalados: (p.escalados||[]).map(e=>({ num: String(e.num), nome: e.nome || registros[String(e.num)]?.nome || militares[String(e.num)] })),
+      altered: !!p.altered,
+      exported: !!p.exported,
+      dirty: !!p.dirty
+    };
+  });
+
+  // re-build registros counts strictly from historico (avoid duplicate accumulation)
+  Object.keys(registros).forEach(n=>{ registros[n].preta = 0; registros[n].azul = 0; registros[n].vermelha = 0; });
+  historico.forEach(h=>{
+    if(registros[String(h.num)]) registros[String(h.num)][h.cor] = (registros[String(h.num)][h.cor] || 0) + 1;
+  });
+
+  // if no projecao or outdated, generate from today
+  if(!projecao || projecao.length === 0) gerarProjecao();
+  // ensure projection covers today..END_DATE_ISO: if not, regenerate
+  const first = projecao[0] && projecao[0].dateISO;
+  if(!first || first !== todayISO()) gerarProjecao();
+
+  renderRegistros();
+  renderHistorico();
+  renderProjecao();
+  gerarResumoTotal();
+})();
+</script>
+</body>
+</html>
